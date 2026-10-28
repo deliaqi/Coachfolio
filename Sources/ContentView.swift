@@ -1,6 +1,7 @@
 import SwiftUI
 import UniformTypeIdentifiers
 import AVFoundation
+import Observation
 
 private struct ImportSelection: Identifiable {
     let id = UUID()
@@ -642,6 +643,7 @@ private struct SessionDetailView: View {
     @State private var targetLevel: CredentialLevel = .acc
     @State private var showRetranscribeConfirmation = false
     @State private var sessionColumnHeight: CGFloat = 0
+    @State private var audioController = SessionAudioController()
 
     private var session: CoachingSession { store.session(for: sessionID)! }
     private var language: ImportLanguage { ImportLanguage(rawValue: session.language) ?? .english }
@@ -672,7 +674,23 @@ private struct SessionDetailView: View {
                 HStack(alignment: .top, spacing: 16) {
                     VStack(spacing: 15) {
                         audioCard
-                        TranscriptPanel(store: store, sessionID: sessionID, utterances: session.transcript, focusedTurnID: $focusedTurnID, isTranscribing: isTranscribing, progressText: transcriptionProgress, speakerWarning: speakerWarning, canTranscribe: session.consentConfirmed) {
+                        TranscriptPanel(
+                            store: store,
+                            sessionID: sessionID,
+                            utterances: session.transcript,
+                            focusedTurnID: $focusedTurnID,
+                            isTranscribing: isTranscribing,
+                            progressText: transcriptionProgress,
+                            speakerWarning: speakerWarning,
+                            canTranscribe: session.consentConfirmed,
+                            canPlayAudio: session.consentConfirmed,
+                            playbackTime: audioController.currentTime,
+                            followsPlayback: audioController.hasPlaybackPosition,
+                            playbackPositionRevision: audioController.positionRevision,
+                            onPlayAudioAt: { time in
+                                audioController.play(url: store.audioURL(for: session), from: time, isEnabled: session.consentConfirmed)
+                            }
+                        ) {
                             if session.hasTranscript { showRetranscribeConfirmation = true }
                             else { Task { await transcribe() } }
                         }
@@ -745,51 +763,86 @@ private struct SessionDetailView: View {
 
     private var audioCard: some View {
         HStack(spacing: 12) {
-            AudioPlaybackButton(url: store.audioURL(for: session), isEnabled: session.consentConfirmed)
-            VStack(alignment: .leading, spacing: 4) {
+            AudioPlaybackButton(url: store.audioURL(for: session), isEnabled: session.consentConfirmed, controller: audioController)
+            VStack(alignment: .leading, spacing: 5) {
                 Text("Session recording").font(.system(size: 14, weight: .semibold)).foregroundStyle(StudioColor.ink)
                 HStack(spacing: 8) {
-                    Text(session.formattedDuration).font(.system(size: 12, weight: .medium, design: .monospaced))
-                    Circle().fill(StudioColor.line).frame(width: 3, height: 3)
-                    Text(language.rawValue).font(.system(size: 12))
-                    Circle().fill(StudioColor.line).frame(width: 3, height: 3)
-                    Text("Stored locally").font(.system(size: 12))
-                }.foregroundStyle(StudioColor.muted)
-            }
-            Spacer()
-            if session.consentConfirmed {
-                Menu {
-                    Button(role: .destructive) {
-                        store.updateConsent(sessionID: sessionID, confirmed: false)
-                    } label: {
-                        Label("Remove permission confirmation", systemImage: "hand.raised")
+                    Text(formattedAudioTime(audioController.currentTime))
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundStyle(StudioColor.muted)
+                    Slider(value: audioProgress, in: 0...max(timelineDuration, 1)) { isEditing in
+                        guard !isEditing else { return }
+                        audioController.play(
+                            url: store.audioURL(for: session),
+                            from: audioController.currentTime,
+                            isEnabled: session.consentConfirmed
+                        )
                     }
-                    if session.openAIConsentConfirmed == true {
+                        .tint(StudioColor.forest)
+                        .disabled(!session.consentConfirmed || timelineDuration <= 0)
+                        .accessibilityLabel("Recording position")
+                    Text(timelineDuration > 0 ? formattedAudioTime(timelineDuration) : session.formattedDuration)
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundStyle(StudioColor.muted)
+                }
+                HStack(spacing: 8) {
+                    Text(language.rawValue)
+                    Circle().fill(StudioColor.line).frame(width: 3, height: 3)
+                    Text("Stored locally")
+                }.font(.system(size: 11)).foregroundStyle(StudioColor.muted)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(spacing: 9) {
+                if session.consentConfirmed {
+                    Menu {
                         Button(role: .destructive) {
-                            store.updateOpenAIConsent(sessionID: sessionID, confirmed: false)
+                            store.updateConsent(sessionID: sessionID, confirmed: false)
                         } label: {
-                            Label("Remove OpenAI sharing permission", systemImage: "cloud")
+                            Label("Remove permission confirmation", systemImage: "hand.raised")
+                        }
+                        if session.openAIConsentConfirmed == true {
+                            Button(role: .destructive) {
+                                store.updateOpenAIConsent(sessionID: sessionID, confirmed: false)
+                            } label: {
+                                Label("Remove OpenAI sharing permission", systemImage: "cloud")
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle").font(.system(size: 14)).foregroundStyle(StudioColor.muted)
+                    }
+                    .menuStyle(.borderlessButton)
+                    .help("Manage permission confirmation")
+                }
+                Menu {
+                    ForEach(ImportLanguage.allCases) { item in
+                        Button {
+                            store.updateSessionLanguage(sessionID: sessionID, language: item.rawValue)
+                        } label: {
+                            if item == language { Label(item.rawValue, systemImage: "checkmark") }
+                            else { Text(item.rawValue) }
                         }
                     }
-                } label: {
-                    Image(systemName: "ellipsis.circle").font(.system(size: 14)).foregroundStyle(StudioColor.muted)
-                }
-                .menuStyle(.borderlessButton)
-                .help("Manage permission confirmation")
+                } label: { Image(systemName: "globe").font(.system(size: 13)).foregroundStyle(StudioColor.muted) }
+                    .menuStyle(.borderlessButton).help("Choose the recording language")
             }
-            Menu {
-                ForEach(ImportLanguage.allCases) { item in
-                    Button {
-                        store.updateSessionLanguage(sessionID: sessionID, language: item.rawValue)
-                    } label: {
-                        if item == language { Label(item.rawValue, systemImage: "checkmark") }
-                        else { Text(item.rawValue) }
-                    }
-                }
-            } label: { Label("Language", systemImage: "globe").font(.system(size: 12, weight: .medium)) }
-                .menuStyle(.borderlessButton).help("Choose the recording language")
         }
         .padding(13).background(StudioColor.white, in: RoundedRectangle(cornerRadius: 14))
+    }
+
+    private var timelineDuration: TimeInterval {
+        audioController.duration > 0 ? audioController.duration : session.duration
+    }
+
+    private var audioProgress: Binding<Double> {
+        Binding(
+            get: { min(audioController.currentTime, timelineDuration) },
+            set: { audioController.seek(url: store.audioURL(for: session), to: $0, isEnabled: session.consentConfirmed) }
+        )
+    }
+
+    private func formattedAudioTime(_ time: TimeInterval) -> String {
+        let seconds = max(0, Int(time))
+        return String(format: "%02d:%02d", seconds / 60, seconds % 60)
     }
 
     private func transcribe() async {
@@ -833,33 +886,128 @@ private struct SessionDetailView: View {
 private struct AudioPlaybackButton: View {
     let url: URL
     let isEnabled: Bool
-    @State private var player: AVAudioPlayer?
-    @State private var isPlaying = false
-    @State private var error: String?
+    let controller: SessionAudioController
 
     var body: some View {
         Button {
-            if isPlaying {
-                player?.pause()
-                isPlaying = false
-            } else {
-                do {
-                    if player == nil { player = try AVAudioPlayer(contentsOf: url) }
-                    player?.play()
-                    isPlaying = true
-                } catch let playerError { error = playerError.localizedDescription }
-            }
+            controller.toggle(url: url, isEnabled: isEnabled)
         } label: {
-            Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+            Image(systemName: controller.isPlaying ? "pause.fill" : "play.fill")
                 .font(.system(size: 16, weight: .semibold)).foregroundStyle(.white)
                 .frame(width: 40, height: 40).background(StudioColor.forest, in: Circle())
         }
         .buttonStyle(.plain).disabled(!isEnabled)
         .opacity(isEnabled ? 1 : 0.45)
-        .help(isPlaying ? "Pause recording" : "Play recording")
-        .alert("Couldn’t play recording", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
-            Button("OK", role: .cancel) { error = nil }
-        } message: { Text(error ?? "") }
+        .help(controller.isPlaying ? "Pause recording" : "Play recording")
+        .alert("Couldn’t play recording", isPresented: Binding(
+            get: { controller.error != nil },
+            set: { if !$0 { controller.error = nil } }
+        )) {
+            Button("OK", role: .cancel) { controller.error = nil }
+        } message: { Text(controller.error ?? "") }
+    }
+}
+
+@Observable
+@MainActor
+private final class SessionAudioController {
+    var isPlaying = false
+    var currentTime: TimeInterval = 0
+    var duration: TimeInterval = 0
+    var hasPlaybackPosition = false
+    var positionRevision = 0
+    var error: String?
+
+    @ObservationIgnored private var player: AVAudioPlayer?
+    @ObservationIgnored private var loadedURL: URL?
+    @ObservationIgnored private var progressTask: Task<Void, Never>?
+
+    func toggle(url: URL, isEnabled: Bool) {
+        guard isEnabled else { return }
+        do {
+            try preparePlayer(for: url)
+            guard let player else { return }
+            if player.isPlaying {
+                player.pause()
+                isPlaying = false
+                currentTime = player.currentTime
+                stopProgressUpdates()
+            } else {
+                if player.currentTime >= player.duration { player.currentTime = 0 }
+                isPlaying = player.play()
+                hasPlaybackPosition = true
+                positionRevision += 1
+                currentTime = player.currentTime
+                startProgressUpdates()
+            }
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
+    func play(url: URL, from time: TimeInterval, isEnabled: Bool) {
+        guard isEnabled else { return }
+        do {
+            try preparePlayer(for: url)
+            guard let player else { return }
+            player.currentTime = min(max(0, time), player.duration)
+            currentTime = player.currentTime
+            hasPlaybackPosition = true
+            positionRevision += 1
+            isPlaying = player.play()
+            startProgressUpdates()
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
+    func seek(url: URL, to time: TimeInterval, isEnabled: Bool) {
+        guard isEnabled else { return }
+        do {
+            try preparePlayer(for: url)
+            guard let player else { return }
+            player.currentTime = min(max(0, time), player.duration)
+            currentTime = player.currentTime
+            hasPlaybackPosition = true
+            positionRevision += 1
+            isPlaying = player.isPlaying
+            if isPlaying { startProgressUpdates() }
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
+    private func preparePlayer(for url: URL) throws {
+        guard player == nil || loadedURL != url else { return }
+        progressTask?.cancel()
+        player = try AVAudioPlayer(contentsOf: url)
+        player?.prepareToPlay()
+        loadedURL = url
+        duration = player?.duration ?? 0
+        currentTime = player?.currentTime ?? 0
+        isPlaying = player?.isPlaying ?? false
+    }
+
+    private func startProgressUpdates() {
+        progressTask?.cancel()
+        progressTask = Task { [weak self] in
+            guard let self else { return }
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(200))
+                guard !Task.isCancelled, let player = self.player else { return }
+                self.currentTime = player.currentTime
+                self.isPlaying = player.isPlaying
+                if !player.isPlaying {
+                    self.progressTask = nil
+                    return
+                }
+            }
+        }
+    }
+
+    private func stopProgressUpdates() {
+        progressTask?.cancel()
+        progressTask = nil
     }
 }
 
@@ -880,15 +1028,21 @@ private struct TranscriptPanel: View {
     let progressText: String?
     let speakerWarning: String?
     let canTranscribe: Bool
+    let canPlayAudio: Bool
+    let playbackTime: TimeInterval
+    let followsPlayback: Bool
+    let playbackPositionRevision: Int
+    var onPlayAudioAt: (TimeInterval) -> Void
     var onTranscribe: () -> Void
 
     var body: some View {
         let visibleUtterances = utterances.filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        let playbackTurnID = visibleUtterances.last(where: { $0.startTime <= playbackTime })?.id ?? visibleUtterances.first?.id
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Transcript").font(.system(size: 17, weight: .semibold, design: .rounded)).foregroundStyle(StudioColor.ink)
-                    Text(isTranscribing ? (progressText ?? "Speech recognition stays on this Mac") : (visibleUtterances.isEmpty ? "Speech recognition stays on this Mac" : "Edit the words and label the speakers"))
+                    Text(isTranscribing ? (progressText ?? "Speech recognition stays on this Mac") : (visibleUtterances.isEmpty ? "Speech recognition stays on this Mac" : "Return splits · Delete at start joins · drag the recording bar to seek"))
                         .font(.system(size: 12)).foregroundStyle(StudioColor.muted)
                     if let speakerWarning, !visibleUtterances.isEmpty {
                         Text(speakerWarning).font(.system(size: 11, weight: .medium)).foregroundStyle(.orange)
@@ -937,7 +1091,14 @@ private struct TranscriptPanel: View {
                     ScrollView {
                         LazyVStack(spacing: 7) {
                             ForEach(visibleUtterances) { line in
-                                TranscriptLineRow(store: store, sessionID: sessionID, line: line)
+                                TranscriptLineRow(
+                                    store: store,
+                                    sessionID: sessionID,
+                                    line: line,
+                                    canPlayAudio: canPlayAudio,
+                                    isPlaybackActive: followsPlayback && line.id == playbackTurnID,
+                                    onPlayAudioAt: onPlayAudioAt
+                                )
                                     .id(line.id)
                             }
                         }
@@ -945,6 +1106,18 @@ private struct TranscriptPanel: View {
                     .frame(minHeight: 350, maxHeight: 720)
                     .onChange(of: focusedTurnID) { _, id in
                         if let id { withAnimation(.easeInOut(duration: 0.25)) { proxy.scrollTo(id, anchor: .center) } }
+                    }
+                    .onChange(of: playbackTurnID) { _, id in
+                        guard followsPlayback, let id else { return }
+                        withAnimation(.easeInOut(duration: 0.18)) { proxy.scrollTo(id, anchor: .top) }
+                    }
+                    .onChange(of: followsPlayback) { _, shouldFollow in
+                        guard shouldFollow, let playbackTurnID else { return }
+                        withAnimation(.easeInOut(duration: 0.18)) { proxy.scrollTo(playbackTurnID, anchor: .top) }
+                    }
+                    .onChange(of: playbackPositionRevision) { _, _ in
+                        guard followsPlayback, let playbackTurnID else { return }
+                        proxy.scrollTo(playbackTurnID, anchor: .top)
                     }
                 }
             }
@@ -964,9 +1137,62 @@ private struct TranscriptLineRow: View {
     @Bindable var store: StudioStore
     let sessionID: UUID
     let line: TranscriptUtterance
+    let canPlayAudio: Bool
+    let isPlaybackActive: Bool
+    var onPlayAudioAt: (TimeInterval) -> Void
+
+    @State private var textSelection: TextSelection?
+    @State private var pendingMerge: TranscriptMergeDraft?
+
+    private var currentText: String {
+        store.session(for: sessionID)?.transcript.first(where: { $0.id == line.id })?.text ?? line.text
+    }
+
+    private var splitParts: (first: String, second: String)? {
+        guard let textSelectionUTF16Range = utf16Range(from: textSelection) else { return nil }
+        let source = currentText as NSString
+        guard source.length > 0 else { return nil }
+
+        let proposedOffset = min(max(textSelectionUTF16Range.lowerBound, 0), source.length)
+        let splitOffset: Int
+        if proposedOffset < source.length {
+            let composedRange = source.rangeOfComposedCharacterSequence(at: proposedOffset)
+            if proposedOffset > composedRange.location && proposedOffset < NSMaxRange(composedRange) {
+                let distanceToStart = proposedOffset - composedRange.location
+                let distanceToEnd = NSMaxRange(composedRange) - proposedOffset
+                splitOffset = distanceToStart <= distanceToEnd ? composedRange.location : NSMaxRange(composedRange)
+            } else {
+                splitOffset = proposedOffset
+            }
+        } else {
+            splitOffset = source.length
+        }
+
+        let first = source.substring(to: splitOffset).trimmingCharacters(in: .whitespacesAndNewlines)
+        let second = source.substring(from: splitOffset).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !first.isEmpty, !second.isEmpty else { return nil }
+        return (first, second)
+    }
+
     var body: some View {
         HStack(alignment: .top, spacing: 9) {
-            Text(line.timestamp).font(.system(size: 11, weight: .medium, design: .monospaced)).foregroundStyle(StudioColor.muted).padding(.top, 6).frame(width: 42, alignment: .leading)
+            Button {
+                onPlayAudioAt(line.startTime)
+            } label: {
+                HStack(spacing: 3) {
+                    Image(systemName: "play.fill").font(.system(size: 8, weight: .semibold))
+                    Text(line.timestamp).font(.system(size: 11, weight: .medium, design: .monospaced))
+                }
+                .foregroundStyle(StudioColor.muted)
+                .frame(width: 52, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(!canPlayAudio)
+            .opacity(canPlayAudio ? 1 : 0.45)
+            .help("Play audio from this turn")
+            .accessibilityLabel("Play audio from \(line.timestamp)")
+            .padding(.top, 6)
             Menu {
                 ForEach(Speaker.allCases) { speaker in
                     Button {
@@ -984,19 +1210,203 @@ private struct TranscriptLineRow: View {
                         }
                     }
                 }
+                Divider()
+                Button {
+                    _ = mergeWithPreviousTurn()
+                } label: {
+                    Label("Merge with previous turn", systemImage: "arrow.down.to.line")
+                }
+                .disabled(previousNonemptyTurn == nil)
             } label: {
                 Text(line.speaker == .unknown ? "Label" : line.speaker.rawValue)
                     .font(.system(size: 11, weight: .medium)).foregroundStyle(speakerColor(line.speaker))
                     .padding(.horizontal, 7).padding(.vertical, 4).background(speakerColor(line.speaker).opacity(0.10), in: Capsule())
             }.menuStyle(.borderlessButton).frame(width: 55, alignment: .leading).padding(.top, 1)
             TextField("Transcript line", text: Binding(
-                get: { store.session(for: sessionID)?.transcript.first(where: { $0.id == line.id })?.text ?? line.text },
+                get: { currentText },
                 set: { store.updateUtteranceText(sessionID: sessionID, utteranceID: line.id, text: $0) }
-            ), axis: .vertical)
-            .textFieldStyle(.plain).font(.system(size: 13)).foregroundStyle(StudioColor.ink).lineLimit(1...5)
+            ), selection: $textSelection, axis: .vertical)
+            .textFieldStyle(.plain).font(.system(size: 13)).foregroundStyle(StudioColor.ink).lineLimit(1...)
+            .onKeyPress(keys: [.return, .delete, .deleteForward], phases: .down) { press in
+                switch press.key {
+                case .return:
+                    splitAtCursor()
+                    return .handled
+                case .delete, .deleteForward:
+                    return mergeAtBeginning()
+                default:
+                    return .ignored
+                }
+            }
         }
-        .padding(.horizontal, 8).padding(.vertical, 8).background(StudioColor.canvas.opacity(0.55), in: RoundedRectangle(cornerRadius: 9))
-        .overlay(alignment: .leading) { RoundedRectangle(cornerRadius: 2).fill(speakerColor(line.speaker)).frame(width: 2).padding(.vertical, 7) }
+        .padding(.horizontal, 8).padding(.vertical, 8)
+        .background(isPlaybackActive ? StudioColor.forest.opacity(0.11) : StudioColor.canvas.opacity(0.55), in: RoundedRectangle(cornerRadius: 9))
+        .overlay(alignment: .leading) { RoundedRectangle(cornerRadius: 2).fill(isPlaybackActive ? StudioColor.forest : speakerColor(line.speaker)).frame(width: 2).padding(.vertical, 7) }
+        .sheet(item: $pendingMerge) { draft in
+            TranscriptMergeSheet(draft: draft) { selectedSpeaker in
+                store.mergeUtteranceWithPrevious(
+                    sessionID: sessionID,
+                    previousUtteranceID: draft.previousUtteranceID,
+                    utteranceID: draft.utteranceID,
+                    speaker: selectedSpeaker
+                )
+            }
+        }
+    }
+
+    private func utf16Range(from selection: TextSelection?) -> Range<Int>? {
+        guard let selection else { return nil }
+        switch selection.indices {
+        case .selection(let range):
+            let text = currentText
+            guard let lowerIndex = range.lowerBound.samePosition(in: text.utf16),
+                  let upperIndex = range.upperBound.samePosition(in: text.utf16) else { return nil }
+            let lower = text.utf16.distance(from: text.utf16.startIndex, to: lowerIndex)
+            let upper = text.utf16.distance(from: text.utf16.startIndex, to: upperIndex)
+            return lower..<upper
+        case .multiSelection:
+            return nil
+        @unknown default:
+            return nil
+        }
+    }
+
+    private func mergeAtBeginning() -> KeyPress.Result {
+        guard let selection = utf16Range(from: textSelection),
+              selection.isEmpty,
+              selection.lowerBound == 0 else { return .ignored }
+        return mergeWithPreviousTurn() ? .handled : .ignored
+    }
+
+    private var previousNonemptyTurn: TranscriptUtterance? {
+        guard let session = store.session(for: sessionID),
+              let currentIndex = session.transcript.firstIndex(where: { $0.id == line.id }) else { return nil }
+        return session.transcript[..<currentIndex].last(where: {
+            !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        })
+    }
+
+    @discardableResult
+    private func mergeWithPreviousTurn() -> Bool {
+        guard let previous = previousNonemptyTurn else { return false }
+
+        let mergedText = [previous.text, currentText]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+
+        if previous.speaker == line.speaker {
+            store.mergeUtteranceWithPrevious(
+                sessionID: sessionID,
+                previousUtteranceID: previous.id,
+                utteranceID: line.id,
+                speaker: line.speaker
+            )
+        } else {
+            pendingMerge = TranscriptMergeDraft(
+                previousUtteranceID: previous.id,
+                utteranceID: line.id,
+                previousSpeaker: previous.speaker,
+                currentSpeaker: line.speaker,
+                mergedText: mergedText
+            )
+        }
+        return true
+    }
+
+    private func splitAtCursor() {
+        guard let parts = splitParts,
+              let session = store.session(for: sessionID) else { return }
+
+        let totalWords = max(1, currentText.split(whereSeparator: \.isWhitespace).count)
+        let firstWords = parts.first.split(whereSeparator: \.isWhitespace).count
+        let fraction = min(1, max(0, Double(firstWords) / Double(totalWords)))
+        let nextTurnStart = session.transcript
+            .filter { $0.id != line.id && $0.startTime > line.startTime }
+            .map(\.startTime)
+            .min()
+        let estimatedEnd = line.endTime ?? nextTurnStart ?? session.duration
+        let availableDuration = max(0, estimatedEnd - line.startTime)
+        let splitTime = line.startTime + availableDuration * fraction
+        let secondSpeaker: Speaker
+        switch line.speaker {
+        case .coach: secondSpeaker = .client
+        case .client: secondSpeaker = .coach
+        case .unknown: secondSpeaker = .unknown
+        }
+        store.splitUtterance(
+            sessionID: sessionID,
+            utteranceID: line.id,
+            firstText: parts.first,
+            secondText: parts.second,
+            splitTime: splitTime,
+            firstSpeaker: line.speaker,
+            secondSpeaker: secondSpeaker
+        )
+    }
+}
+
+private struct TranscriptMergeDraft: Identifiable {
+    let id = UUID()
+    let previousUtteranceID: Int
+    let utteranceID: Int
+    let previousSpeaker: Speaker
+    let currentSpeaker: Speaker
+    let mergedText: String
+
+    var speakerChoices: [Speaker] { [previousSpeaker, currentSpeaker] }
+}
+
+private struct TranscriptMergeSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let draft: TranscriptMergeDraft
+    var onMerge: (Speaker) -> Void
+
+    @State private var selectedSpeaker: Speaker
+
+    init(draft: TranscriptMergeDraft, onMerge: @escaping (Speaker) -> Void) {
+        self.draft = draft
+        self.onMerge = onMerge
+        _selectedSpeaker = State(initialValue: draft.previousSpeaker)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Choose a label for the merged turn")
+                    .font(.system(size: 18, weight: .semibold, design: .rounded))
+                    .foregroundStyle(StudioColor.ink)
+                Text("These two turns have different speaker labels.")
+                    .font(.system(size: 13)).foregroundStyle(StudioColor.muted)
+            }
+
+            ScrollView {
+                Text(draft.mergedText)
+                    .font(.system(size: 13)).foregroundStyle(StudioColor.ink).lineSpacing(3)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(12)
+                    .background(StudioColor.canvas.opacity(0.75), in: RoundedRectangle(cornerRadius: 9))
+            }
+
+            Picker("Speaker", selection: $selectedSpeaker) {
+                ForEach(draft.speakerChoices) { speaker in
+                    Text(speaker.rawValue).tag(speaker)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Merge turns") {
+                    onMerge(selectedSpeaker)
+                    dismiss()
+                }
+                .buttonStyle(.borderedProminent).tint(StudioColor.forest).keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(22)
+        .frame(width: 500, height: 390)
     }
 }
 

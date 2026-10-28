@@ -6,7 +6,7 @@ Coachfolio is a native macOS app for coaches to keep client and session records,
 
 - Organize client profiles, notes, recordings, transcripts, and practice reviews.
 - Transcribe audio on the Mac with WhisperKit and estimate two-speaker turns with SpeakerKit. The app stores speaker IDs so you can relabel all turns from one speaker together.
-- Edit transcript wording and speaker labels before analysis.
+- Edit transcript wording and speaker labels before analysis. Press Return at the speaker change point to split a mixed-speaker turn. Press Delete at the beginning of a turn to join it to the previous turn; if their labels differ, choose the merged turn’s label. The speaker menu also offers **Merge with previous turn**. Click a turn’s timestamp or drag the recording seek bar to play from that point; playback follows the active turn in the transcript.
 - Generate a structured practice review with strengths, growth areas, ICF competency evidence, an ACC/PCC practice-level estimate, and an ACC readiness estimate.
 - Choose OpenAI GPT analysis or the available on-device/offline review mode in Settings.
 - Jump from review evidence to the cited transcript turns.
@@ -46,6 +46,8 @@ Coachfolio is a practice aid. Its level and ACC readiness estimates are not ICF 
 3. To use GPT analysis, open **Coachfolio > Settings**, add an OpenAI API key, and choose a model. On-device/offline review can be selected there instead.
 4. Choose **Add recording**, select an audio file, and confirm the client permissions shown in the app.
 5. Start transcription, check the transcript and speaker labels, then select the ACC or PCC practice lens and request a review.
+
+To rebuild and reopen the latest source with one double-click, open `Restart Coachfolio.command` from Finder.
 
 The app product is named **Coachfolio**. The Xcode project and scheme still use the original development name, **Coach Journal**. The existing bundle identifier and Application Support folder are retained so saved API keys and local session data remain available after the rename.
 

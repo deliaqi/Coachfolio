@@ -38,6 +38,7 @@ struct CoachClient: Identifiable, Codable, Hashable {
 struct TranscriptUtterance: Identifiable, Codable, Hashable {
     var id: Int
     var startTime: TimeInterval
+    var endTime: TimeInterval? = nil
     var speaker: Speaker = .unknown
     var speakerID: Int? = nil
     var text: String

@@ -234,6 +234,7 @@ enum TranscriptionService {
             turns.append(TranscriptUtterance(
                 id: turns.count + 1,
                 startTime: currentStart,
+                endTime: currentEnd,
                 speaker: currentSpeaker,
                 speakerID: currentSpeakerID,
                 text: text

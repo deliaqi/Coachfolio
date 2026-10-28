@@ -109,6 +109,73 @@ final class StudioStore {
         save()
     }
 
+    func splitUtterance(
+        sessionID: UUID,
+        utteranceID: Int,
+        firstText: String,
+        secondText: String,
+        splitTime: TimeInterval,
+        firstSpeaker: Speaker,
+        secondSpeaker: Speaker
+    ) {
+        guard let sessionIndex = sessions.firstIndex(where: { $0.id == sessionID }),
+              let utteranceIndex = sessions[sessionIndex].transcript.firstIndex(where: { $0.id == utteranceID }) else { return }
+
+        let firstText = firstText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let secondText = secondText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !firstText.isEmpty, !secondText.isEmpty else { return }
+
+        let original = sessions[sessionIndex].transcript[utteranceIndex]
+        let boundedSplitTime = max(original.startTime, min(splitTime, original.endTime ?? splitTime))
+        sessions[sessionIndex].transcript[utteranceIndex].text = firstText
+        sessions[sessionIndex].transcript[utteranceIndex].endTime = boundedSplitTime
+        sessions[sessionIndex].transcript[utteranceIndex].speaker = firstSpeaker
+        sessions[sessionIndex].transcript[utteranceIndex].speakerID = nil
+
+        let nextID = (sessions[sessionIndex].transcript.map(\.id).max() ?? 0) + 1
+        let secondTurn = TranscriptUtterance(
+            id: nextID,
+            startTime: boundedSplitTime,
+            endTime: original.endTime,
+            speaker: secondSpeaker,
+            speakerID: nil,
+            text: secondText
+        )
+        sessions[sessionIndex].transcript.insert(secondTurn, at: utteranceIndex + 1)
+        sessions[sessionIndex].review = nil
+        save()
+    }
+
+    func mergeUtteranceWithPrevious(
+        sessionID: UUID,
+        previousUtteranceID: Int,
+        utteranceID: Int,
+        speaker: Speaker
+    ) {
+        guard let sessionIndex = sessions.firstIndex(where: { $0.id == sessionID }),
+              let previousIndex = sessions[sessionIndex].transcript.firstIndex(where: { $0.id == previousUtteranceID }),
+              let utteranceIndex = sessions[sessionIndex].transcript.firstIndex(where: { $0.id == utteranceID }),
+              previousIndex < utteranceIndex else { return }
+
+        let previous = sessions[sessionIndex].transcript[previousIndex]
+        let utterance = sessions[sessionIndex].transcript[utteranceIndex]
+        let mergedText = [previous.text, utterance.text]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+        guard !mergedText.isEmpty else { return }
+
+        sessions[sessionIndex].transcript[previousIndex].text = mergedText
+        sessions[sessionIndex].transcript[previousIndex].endTime = utterance.endTime ?? previous.endTime
+        sessions[sessionIndex].transcript[previousIndex].speaker = speaker
+        sessions[sessionIndex].transcript[previousIndex].speakerID = previous.speakerID == utterance.speakerID
+            ? previous.speakerID
+            : nil
+        sessions[sessionIndex].transcript.remove(at: utteranceIndex)
+        sessions[sessionIndex].review = nil
+        save()
+    }
+
     func updateUtteranceText(sessionID: UUID, utteranceID: Int, text: String) {
         guard let sessionIndex = sessions.firstIndex(where: { $0.id == sessionID }),
               let utteranceIndex = sessions[sessionIndex].transcript.firstIndex(where: { $0.id == utteranceID }) else { return }
